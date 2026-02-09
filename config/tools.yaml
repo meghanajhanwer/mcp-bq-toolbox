@@ -1,0 +1,19 @@
+sources:
+  marketing_bq:
+    kind: "bigquery"
+    project: "crafty-plateau-484419-m9"
+    location: "US"
+    writeMode: "blocked"          # SELECT-only
+    allowedDatasets:
+      - "marketing_demo"          # restrict to this dataset only
+    maxQueryResultRows: 200
+
+tools:
+  marketing_sql:
+    kind: "bigquery-execute-sql"
+    source: "marketing_bq"
+    description: "Run read-only SELECT queries on marketing_demo dataset."
+
+toolsets:
+  marketing:
+    - marketing_sql

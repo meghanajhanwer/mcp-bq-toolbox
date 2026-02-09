@@ -1,0 +1,89 @@
+steps:
+  - id: "Ensure runtime SA exists"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        SA_EMAIL="${_RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+        if ! gcloud iam service-accounts describe "$${SA_EMAIL}" >/dev/null 2>&1; then
+          gcloud iam service-accounts create "${_RUNTIME_SA_NAME}" \
+            --display-name="Toolbox runtime service account"
+        fi
+        echo "Runtime SA: $${SA_EMAIL}"
+
+  - id: "Create or update tools secret"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        if gcloud secrets describe "${_TOOLS_SECRET}" >/dev/null 2>&1; then
+          gcloud secrets versions add "${_TOOLS_SECRET}" \
+            --data-file="config/tools.yaml"
+        else
+          gcloud secrets create "${_TOOLS_SECRET}" \
+            --data-file="config/tools.yaml" \
+            --replication-policy="automatic"
+        fi
+  
+  - id: "Grant runtime SA BigQuery roles"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        SA_EMAIL="${_RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+          --member="serviceAccount:$${SA_EMAIL}" \
+          --role="roles/bigquery.jobUser" >/dev/null
+
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+          --member="serviceAccount:$${SA_EMAIL}" \
+          --role="roles/bigquery.dataViewer" >/dev/null
+
+        gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+          --member="serviceAccount:$${SA_EMAIL}" \
+          --role="roles/bigquery.metadataViewer" >/dev/null
+        
+        gcloud secrets add-iam-policy-binding "${_TOOLS_SECRET}" \
+          --project="${PROJECT_ID}" \
+          --member="serviceAccount:$${SA_EMAIL}" \
+          --role="roles/secretmanager.secretAccessor" >/dev/null
+
+  - id: "Deploy Toolbox MCP to Cloud Run (private IAM)"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        SA_EMAIL="${_RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+        gcloud run deploy "${_SERVICE_NAME}" \
+          --image="${_TOOLBOX_IMAGE}" \
+          --region="${_REGION}" \
+          --service-account="$${SA_EMAIL}" \
+          --set-secrets="/app/tools.yaml=${_TOOLS_SECRET}:latest" \
+          --args="--tools-file=/app/tools.yaml","--address=0.0.0.0","--port=8080","--ui" \
+          --no-allow-unauthenticated
+
+  - id: "Print service URL"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - "-ceu"
+      - |
+        URL="$$(gcloud run services describe "${_SERVICE_NAME}" \
+          --region="${_REGION}" --format='value(status.url)')"
+        echo "MCP URL: $${URL}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _REGION: "us-central1"
+  _SERVICE_NAME: "toolbox-mcp"
+  _RUNTIME_SA_NAME: "toolbox-sa"
+  _TOOLS_SECRET: "tools"
+  _TOOLBOX_IMAGE: "us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:0.26.0"
